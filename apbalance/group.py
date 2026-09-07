@@ -8,12 +8,25 @@ import random
 from .runner import inspect_group
 
 
-ASSUMPTION = (
-    "Players are assumed to be capable of completing logically available checks "
-    "as they become accessible, with comparable efficiency and without substantial "
-    "skill, execution, routing, knowledge, break, or communication delays. Actual "
-    "play time may differ significantly between games and players."
-)
+ASSUMPTIONS = [
+    (
+        "Players are assumed to be capable of completing logically available "
+        "checks as they become accessible, with comparable efficiency and without "
+        "substantial skill, execution, routing, knowledge, break, or communication "
+        "delays. Actual play time may differ significantly between games and players."
+    ),
+    (
+        "Check starvation means that an unfinished player has no sendable "
+        "Archipelago checks in the current logical progression step while another "
+        "unfinished player does. It does not necessarily mean the player has no "
+        "meaningful in-game activity."
+    ),
+    (
+        "When a player completes their configured goal, all remaining items hosted "
+        "in that player's world are assumed to be released immediately. Those "
+        "post-goal locations no longer contribute player workload or bottleneck risk."
+    ),
+]
 
 
 def _summarize(values: list[float | int]) -> dict[str, Any]:
@@ -67,7 +80,6 @@ def analyze_group(
 
     first = results[0]
     player_ids = [player["id"] for player in first["players"]]
-
     players_out: list[dict[str, Any]] = []
 
     for player_id in player_ids:
@@ -81,12 +93,16 @@ def analyze_group(
                 **player_result,
             })
 
-        pressure_events = [
+        bottleneck_events = [
             event
             for row in seed_rows
-            for event in row["progression_pressure"]["events"]
+            for event in row["progression_bottleneck"]["events"]
         ]
-
+        workload_ratios = [
+            event["workload_ratio_to_active_peer_median"]
+            for event in bottleneck_events
+            if event["workload_ratio_to_active_peer_median"] is not None
+        ]
         completion_positions = [
             row["early_completion"]["completion_position"]
             for row in seed_rows
@@ -97,44 +113,63 @@ def analyze_group(
             for row in seed_rows
             if row["early_completion"]["peers_still_active_fraction"] is not None
         ]
-        idle_fractions = [
-            row["idle"]["idle_fraction_before_completion"]
+        starvation_fractions = [
+            row["check_starvation"]["starvation_fraction_before_completion"]
             for row in seed_rows
-            if row["idle"]["idle_fraction_before_completion"] is not None
+            if row["check_starvation"]["starvation_fraction_before_completion"] is not None
         ]
+        released_checks = [
+            row["early_release"]["released_checks"] for row in seed_rows
+        ]
+        released_progression = [
+            row["early_release"]["released_progression_items"] for row in seed_rows
+        ]
+        released_external = [
+            row["early_release"]["released_external_progression_items"]
+            for row in seed_rows
+        ]
+        release_recipients = [
+            row["early_release"]["recipient_player_count"] for row in seed_rows
+        ]
+        release_ratios = [
+            row["early_release"]["release_checks_ratio_to_active_peer_median"]
+            for row in seed_rows
+            if row["early_release"]["release_checks_ratio_to_active_peer_median"] is not None
+        ]
+
+        bottleneck_seed_count = sum(
+            1 for row in seed_rows
+            if row["progression_bottleneck"]["event_count"] > 0
+        )
+        starvation_seed_count = sum(
+            1 for row in seed_rows
+            if row["check_starvation"]["starvation_step_count"] > 0
+        )
 
         players_out.append({
             "id": player_id,
             "name": identity["name"],
             "game": identity["game"],
             "samples": samples,
-            "progression_pressure": {
-                "seeds_with_pressure": sum(
-                    1 for row in seed_rows
-                    if row["progression_pressure"]["event_count"] > 0
-                ),
-                "seed_frequency": round(
-                    sum(
-                        1 for row in seed_rows
-                        if row["progression_pressure"]["event_count"] > 0
-                    ) / samples,
-                    3,
-                ),
+            "progression_bottleneck": {
+                "seeds_with_dependency_events": bottleneck_seed_count,
+                "seed_frequency": round(bottleneck_seed_count / samples, 3),
                 "events_per_seed": _summarize([
-                    row["progression_pressure"]["event_count"]
+                    row["progression_bottleneck"]["event_count"]
                     for row in seed_rows
                 ]),
-                "checks_during_pressure_events": _summarize([
+                "checks_during_events": _summarize([
                     event["host_sendable_checks"]
-                    for event in pressure_events
+                    for event in bottleneck_events
                 ]),
+                "workload_ratio_to_active_peer_median": _summarize(workload_ratios),
                 "waiting_players_per_event": _summarize([
                     event["waiting_player_count"]
-                    for event in pressure_events
+                    for event in bottleneck_events
                 ]),
                 "external_progression_for_waiting_players_per_event": _summarize([
                     event["external_progression_for_waiting_players"]
-                    for event in pressure_events
+                    for event in bottleneck_events
                 ]),
             },
             "early_completion": {
@@ -152,35 +187,36 @@ def analyze_group(
                     if peers_remaining else None
                 ),
             },
-            "idle": {
-                "seeds_with_idle": sum(
-                    1 for row in seed_rows if row["idle"]["idle_step_count"] > 0
-                ),
-                "seed_frequency": round(
-                    sum(1 for row in seed_rows if row["idle"]["idle_step_count"] > 0) / samples,
-                    3,
-                ),
-                "idle_steps": _summarize([
-                    row["idle"]["idle_step_count"]
+            "check_starvation": {
+                "seeds_with_starvation": starvation_seed_count,
+                "seed_frequency": round(starvation_seed_count / samples, 3),
+                "starvation_steps": _summarize([
+                    row["check_starvation"]["starvation_step_count"]
                     for row in seed_rows
                 ]),
-                "idle_fraction_before_completion": _summarize(idle_fractions),
-                "longest_idle_streak": _summarize([
-                    row["idle"]["longest_idle_streak"]
+                "starvation_fraction_before_completion": _summarize(starvation_fractions),
+                "longest_starvation_streak": _summarize([
+                    row["check_starvation"]["longest_starvation_streak"]
                     for row in seed_rows
                 ]),
+            },
+            "early_release": {
+                "released_checks": _summarize(released_checks),
+                "released_progression_items": _summarize(released_progression),
+                "released_external_progression_items": _summarize(released_external),
+                "recipient_player_count": _summarize(release_recipients),
+                "release_checks_ratio_to_active_peer_median": _summarize(release_ratios),
             },
             "seed_results": seed_rows,
         })
 
-    # Separate rankings for the three target failure modes. These are descriptive
-    # rankings within the submitted group, not universal GOOD/BAD classifications.
-    pressure_ranking = sorted(
+    bottleneck_ranking = sorted(
         players_out,
         key=lambda p: (
-            p["progression_pressure"]["seed_frequency"],
-            p["progression_pressure"]["waiting_players_per_event"]["median"] or 0,
-            p["progression_pressure"]["checks_during_pressure_events"]["median"] or 0,
+            p["progression_bottleneck"]["seed_frequency"],
+            p["progression_bottleneck"]["workload_ratio_to_active_peer_median"]["median"] or 0,
+            p["progression_bottleneck"]["waiting_players_per_event"]["median"] or 0,
+            p["progression_bottleneck"]["external_progression_for_waiting_players_per_event"]["median"] or 0,
         ),
         reverse=True,
     )
@@ -194,21 +230,32 @@ def analyze_group(
         reverse=True,
     )
 
-    idle_ranking = sorted(
+    starvation_ranking = sorted(
         players_out,
         key=lambda p: (
-            p["idle"]["idle_fraction_before_completion"]["median"] or 0,
-            p["idle"]["longest_idle_streak"]["median"] or 0,
+            p["check_starvation"]["starvation_fraction_before_completion"]["median"] or 0,
+            p["check_starvation"]["longest_starvation_streak"]["median"] or 0,
+        ),
+        reverse=True,
+    )
+
+    release_ranking = sorted(
+        players_out,
+        key=lambda p: (
+            p["early_completion"]["peers_still_active_fraction_at_completion"]["median"] or 0,
+            p["early_release"]["release_checks_ratio_to_active_peer_median"]["median"] or 0,
+            p["early_release"]["released_external_progression_items"]["median"] or 0,
+            p["early_release"]["released_checks"]["median"] or 0,
         ),
         reverse=True,
     )
 
     return {
-        "schema_version": 1,
-        "analyzer_version": "0.8.2",
+        "schema_version": 2,
+        "analyzer_version": "0.9.0",
         "mode": "group_multi_seed",
         "archipelago_version": first.get("archipelago_version"),
-        "analysis_assumption": ASSUMPTION,
+        "analysis_assumptions": ASSUMPTIONS,
         "simulation": {
             "samples": samples,
             "base_seed": base_seed,
@@ -216,18 +263,20 @@ def analyze_group(
         },
         "players": players_out,
         "rankings": {
-            "progression_pressure": [
+            "progression_bottleneck": [
                 {
                     "id": p["id"],
                     "name": p["name"],
                     "game": p["game"],
-                    "seed_frequency": p["progression_pressure"]["seed_frequency"],
+                    "seed_frequency": p["progression_bottleneck"]["seed_frequency"],
+                    "median_workload_ratio_to_active_peer_median":
+                        p["progression_bottleneck"]["workload_ratio_to_active_peer_median"]["median"],
                     "median_waiting_players":
-                        p["progression_pressure"]["waiting_players_per_event"]["median"],
-                    "median_checks_during_pressure":
-                        p["progression_pressure"]["checks_during_pressure_events"]["median"],
+                        p["progression_bottleneck"]["waiting_players_per_event"]["median"],
+                    "median_external_progression_for_waiting_players":
+                        p["progression_bottleneck"]["external_progression_for_waiting_players_per_event"]["median"],
                 }
-                for p in pressure_ranking
+                for p in bottleneck_ranking
             ],
             "early_completion": [
                 {
@@ -241,18 +290,37 @@ def analyze_group(
                 }
                 for p in early_ranking
             ],
-            "idle": [
+            "check_starvation": [
                 {
                     "id": p["id"],
                     "name": p["name"],
                     "game": p["game"],
-                    "idle_seed_frequency": p["idle"]["seed_frequency"],
-                    "median_idle_fraction_before_completion":
-                        p["idle"]["idle_fraction_before_completion"]["median"],
-                    "median_longest_idle_streak":
-                        p["idle"]["longest_idle_streak"]["median"],
+                    "starvation_seed_frequency":
+                        p["check_starvation"]["seed_frequency"],
+                    "median_starvation_fraction_before_completion":
+                        p["check_starvation"]["starvation_fraction_before_completion"]["median"],
+                    "median_longest_starvation_streak":
+                        p["check_starvation"]["longest_starvation_streak"]["median"],
                 }
-                for p in idle_ranking
+                for p in starvation_ranking
+            ],
+            "early_release": [
+                {
+                    "id": p["id"],
+                    "name": p["name"],
+                    "game": p["game"],
+                    "median_completion_position":
+                        p["early_completion"]["completion_position"]["median"],
+                    "median_peers_still_active_fraction":
+                        p["early_completion"]["peers_still_active_fraction_at_completion"]["median"],
+                    "median_released_checks":
+                        p["early_release"]["released_checks"]["median"],
+                    "median_released_external_progression_items":
+                        p["early_release"]["released_external_progression_items"]["median"],
+                    "median_release_checks_ratio_to_active_peer_median":
+                        p["early_release"]["release_checks_ratio_to_active_peer_median"]["median"],
+                }
+                for p in release_ranking
             ],
         },
         "samples": [

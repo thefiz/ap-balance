@@ -205,22 +205,88 @@ def completion_steps_from_spheres(
             detection[player] = fallback_detection
         return completion_steps, detection
 
+
+def _median(values):
+    values = sorted(values)
+    if not values:
+        return None
+    middle = len(values) // 2
+    if len(values) % 2:
+        return float(values[middle])
+    return (values[middle - 1] + values[middle]) / 2
+
+
+def _release_payload(logical_spheres, host: int, completion_step: int | None) -> dict:
+    """
+    Count sendable locations hosted by a player that occur strictly after that
+    player's goal-completion sphere. Under the standard release-on-goal
+    assumption, these become available immediately when the player completes.
+    """
+    if completion_step is None:
+        return {
+            "released_checks": 0,
+            "released_progression_items": 0,
+            "released_external_progression_items": 0,
+            "recipient_players": [],
+            "recipient_player_count": 0,
+        }
+
+    released_checks = 0
+    released_progression = 0
+    released_external_progression = 0
+    recipients = set()
+
+    for sphere in logical_spheres:
+        if sphere["index"] <= completion_step:
+            continue
+
+        for location in sphere["locations"]:
+            if not location["sendable"] or int(location["player"]) != host:
+                continue
+
+            released_checks += 1
+
+            if location["progression"]:
+                released_progression += 1
+                if (
+                    location["item_player"] is not None
+                    and int(location["item_player"]) != host
+                ):
+                    released_external_progression += 1
+                    recipients.add(int(location["item_player"]))
+
+    return {
+        "released_checks": released_checks,
+        "released_progression_items": released_progression,
+        "released_external_progression_items": released_external_progression,
+        "recipient_players": sorted(recipients),
+        "recipient_player_count": len(recipients),
+    }
+
+
 def timeline_analysis(multiworld, logical_spheres, completion_steps, completion_detection) -> dict:
     player_ids = list(range(1, multiworld.players + 1))
     total_steps = len(logical_spheres)
 
-    rows = []
     player_events = {
         player: {
-            "pressure": [],
-            "idle_steps": [],
+            "dependency_events": [],
+            "starvation_steps": [],
         }
         for player in player_ids
     }
 
+    release_payloads = {
+        player: _release_payload(logical_spheres, player, completion_steps[player])
+        for player in player_ids
+    }
+
+    rows = []
+
     for sphere in logical_spheres:
         step = sphere["index"]
-        checks_by_player = {player: 0 for player in player_ids}
+
+        raw_checks_by_player = {player: 0 for player in player_ids}
         external_items_by_host_and_recipient = {
             player: {recipient: 0 for recipient in player_ids}
             for player in player_ids
@@ -231,7 +297,7 @@ def timeline_analysis(multiworld, logical_spheres, completion_steps, completion_
                 continue
 
             host = int(location["player"])
-            checks_by_player[host] += 1
+            raw_checks_by_player[host] += 1
 
             if (
                 location["progression"]
@@ -249,35 +315,59 @@ def timeline_analysis(multiworld, logical_spheres, completion_steps, completion_
             for player in player_ids
         }
 
+        # Once a host has completed, all later hosted items are considered
+        # released and therefore no longer represent player workload.
+        effective_checks_by_player = {
+            player: (
+                0 if completed_before[player] else raw_checks_by_player[player]
+            )
+            for player in player_ids
+        }
+
         unfinished_players = [
             player for player in player_ids if not completed_before[player]
         ]
         active_unfinished = [
             player
             for player in unfinished_players
-            if checks_by_player[player] > 0
+            if effective_checks_by_player[player] > 0
         ]
-        idle_unfinished = [
+        starved_unfinished = [
             player
             for player in unfinished_players
-            if checks_by_player[player] == 0
+            if effective_checks_by_player[player] == 0
         ]
 
-        # An idle condition only counts while another unfinished player actually
-        # has logically available sendable work.
         if active_unfinished:
-            for player in idle_unfinished:
-                player_events[player]["idle_steps"].append(step)
+            for player in starved_unfinished:
+                player_events[player]["starvation_steps"].append(step)
 
-        pressure_events = []
+        dependency_events = []
+
         for host in active_unfinished:
             waiting_recipients = [
                 recipient
-                for recipient in idle_unfinished
+                for recipient in starved_unfinished
                 if external_items_by_host_and_recipient[host][recipient] > 0
             ]
             if not waiting_recipients:
                 continue
+
+            peer_workloads = [
+                effective_checks_by_player[player]
+                for player in active_unfinished
+                if player != host and effective_checks_by_player[player] > 0
+            ]
+            active_peer_median = _median(peer_workloads)
+
+            if active_peer_median is None:
+                workload_ratio = None
+            elif active_peer_median == 0:
+                workload_ratio = None
+            else:
+                workload_ratio = round(
+                    effective_checks_by_player[host] / active_peer_median, 3
+                )
 
             external_for_waiting = sum(
                 external_items_by_host_and_recipient[host][recipient]
@@ -287,21 +377,59 @@ def timeline_analysis(multiworld, logical_spheres, completion_steps, completion_
             event = {
                 "step": step,
                 "host": host,
-                "host_sendable_checks": checks_by_player[host],
+                "host_sendable_checks": effective_checks_by_player[host],
+                "active_peer_median_sendable_checks": active_peer_median,
+                "workload_ratio_to_active_peer_median": workload_ratio,
                 "waiting_players": waiting_recipients,
                 "waiting_player_count": len(waiting_recipients),
                 "external_progression_for_waiting_players": external_for_waiting,
             }
-            pressure_events.append(event)
-            player_events[host]["pressure"].append(event)
+            dependency_events.append(event)
+            player_events[host]["dependency_events"].append(event)
+
+        completing_players = [
+            player
+            for player in player_ids
+            if completion_steps[player] is not None
+            and completion_steps[player] == step
+        ]
+
+        release_events = []
+        for player in completing_players:
+            payload = release_payloads[player]
+            peer_workloads = [
+                effective_checks_by_player[peer]
+                for peer in active_unfinished
+                if peer != player and effective_checks_by_player[peer] > 0
+            ]
+            peer_median = _median(peer_workloads)
+
+            if peer_median is None or peer_median == 0:
+                release_ratio = None
+            else:
+                release_ratio = round(payload["released_checks"] / peer_median, 3)
+
+            release_events.append({
+                "player": player,
+                **payload,
+                "release_checks_ratio_to_active_peer_median": release_ratio,
+            })
 
         rows.append({
             "step": step,
-            "checks_by_player": {str(k): v for k, v in checks_by_player.items()},
-            "completed_before_step": {str(k): v for k, v in completed_before.items()},
+            "raw_checks_by_player": {
+                str(k): v for k, v in raw_checks_by_player.items()
+            },
+            "effective_checks_by_player": {
+                str(k): v for k, v in effective_checks_by_player.items()
+            },
+            "completed_before_step": {
+                str(k): v for k, v in completed_before.items()
+            },
             "active_unfinished_players": active_unfinished,
-            "idle_unfinished_players": idle_unfinished,
-            "progression_pressure_events": pressure_events,
+            "check_starved_unfinished_players": starved_unfinished,
+            "dependency_events": dependency_events,
+            "completion_release_events": release_events,
         })
 
     valid_completion_steps = [
@@ -332,29 +460,59 @@ def timeline_analysis(multiworld, logical_spheres, completion_steps, completion_
                 round(still_active / len(peers), 3) if peers else 0.0
             )
 
-        idle_steps = player_events[player]["idle_steps"]
+        starvation_steps = player_events[player]["starvation_steps"]
 
-        # Only count timeline steps through this player's own completion point.
         if completion_step is None:
             eligible_steps = total_steps
         else:
             eligible_steps = max(completion_step + 1, 0)
 
-        longest_idle = 0
+        longest_starvation = 0
         current = 0
         previous = None
-        for step in idle_steps:
+        for step in starvation_steps:
             if previous is not None and step == previous + 1:
                 current += 1
             else:
                 current = 1
-            longest_idle = max(longest_idle, current)
+            longest_starvation = max(longest_starvation, current)
             previous = step
 
+        release_payload = release_payloads[player]
+
+        completion_peer_workloads = []
+        if completion_step is not None:
+            sphere = next(
+                (row for row in rows if row["step"] == completion_step),
+                None,
+            )
+            if sphere is not None:
+                completion_peer_workloads = [
+                    value
+                    for peer, value in (
+                        (int(k), v)
+                        for k, v in sphere["effective_checks_by_player"].items()
+                    )
+                    if peer != player and value > 0
+                ]
+
+        completion_peer_median = _median(completion_peer_workloads)
+        if completion_peer_median is None or completion_peer_median == 0:
+            release_ratio = None
+        else:
+            release_ratio = round(
+                release_payload["released_checks"] / completion_peer_median, 3
+            )
+
+        dependency_events = player_events[player]["dependency_events"]
+
         players[str(player)] = {
-            "progression_pressure": {
-                "event_count": len(player_events[player]["pressure"]),
-                "events": player_events[player]["pressure"],
+            "progression_bottleneck": {
+                # These are dependency events with group-relative workload
+                # measurements. v0.9 deliberately does not impose a universal
+                # GOOD/BAD threshold.
+                "event_count": len(dependency_events),
+                "events": dependency_events,
             },
             "early_completion": {
                 "completion_step": completion_step,
@@ -362,22 +520,29 @@ def timeline_analysis(multiworld, logical_spheres, completion_steps, completion_
                 "peers_still_active_fraction": peers_still_active_fraction,
                 "completion_detection": completion_detection[player],
             },
-            "idle": {
-                "idle_step_count": len(idle_steps),
-                "idle_steps": idle_steps,
+            "check_starvation": {
+                "starvation_step_count": len(starvation_steps),
+                "starvation_steps": starvation_steps,
                 "eligible_steps_before_completion": eligible_steps,
-                "idle_fraction_before_completion": (
-                    round(len(idle_steps) / eligible_steps, 3)
+                "starvation_fraction_before_completion": (
+                    round(len(starvation_steps) / eligible_steps, 3)
                     if eligible_steps > 0 else 0.0
                 ),
-                "longest_idle_streak": longest_idle,
+                "longest_starvation_streak": longest_starvation,
+            },
+            "early_release": {
+                **release_payload,
+                "release_checks_ratio_to_active_peer_median": release_ratio,
             },
         }
 
     return {
-        "completion_detection": completion_detection[player],
+        "completion_detection": {
+            str(k): v for k, v in completion_detection.items()
+        },
         "completion_steps": {str(k): v for k, v in completion_steps.items()},
         "group_last_completion_step": group_last_completion,
+        "release_on_goal_completion": True,
         "steps": rows,
         "players": players,
     }
@@ -443,7 +608,7 @@ def main() -> int:
 
         result = {
             "schema_version": 1,
-            "analyzer_version": "0.8.2",
+            "analyzer_version": "0.9.0",
             "archipelago_version": getattr(Utils, "__version__", None),
             "seed": seed,
             "seed_name": multiworld.seed_name,
@@ -485,7 +650,7 @@ def main() -> int:
 
         result = {
             "schema_version": 1,
-            "analyzer_version": "0.8.2",
+            "analyzer_version": "0.9.0",
             "archipelago_version": getattr(Utils, "__version__", None),
             "seed": seed,
             "seed_name": multiworld.seed_name,

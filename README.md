@@ -1,18 +1,27 @@
 # AP Balance Analyzer
 
-Archipelago multiworld outlier analysis.
+Archipelago multiworld pacing and outlier analysis.
 
 ## Primary goal
 
-Analyze a group of player YAMLs together and detect three pacing problems:
+Analyze a group of player YAMLs together and identify recurring structural pacing risks.
 
-- progression overload: one player has substantial logical workload while idle players are waiting on progression hosted in that world
-- early completion: one player completes substantially before peers
-- idle time: one player has no logically available sendable checks while unfinished peers are still playing
+v0.9 reports four separate conditions:
 
-## Assumption
+- progression bottleneck
+- early completion
+- check starvation
+- early release
+
+These are descriptive group-relative measurements, not difficulty ratings.
+
+## Assumptions
 
 Players are assumed to be capable of completing logically available checks as they become accessible, with comparable efficiency and without substantial skill, execution, routing, knowledge, break, or communication delays. Actual play time may differ significantly between games and players.
+
+Check starvation means an unfinished player has no sendable Archipelago checks in the current logical progression step while another unfinished player does. It does not necessarily mean the player has no meaningful in-game activity.
+
+When a player completes their configured goal, all remaining items hosted in that player's world are assumed to be released immediately. Post-goal locations therefore no longer contribute player workload or bottleneck risk.
 
 ## Group analysis
 
@@ -29,27 +38,59 @@ Custom worlds can be supplied more than once:
 apbalance group ".\Players" `
   --archipelago "C:\path\to\Archipelago" `
   --apworld "C:\apworlds\plateup.apworld" `
+  --apworld "C:\apworlds\another.apworld" `
   --samples 100 `
   --output group-analysis.json
 ```
 
-## Group output
+## Progression bottleneck
 
-Per player:
+A dependency event occurs when an unfinished player has no sendable checks and progression for that player is hosted in another unfinished player's current workload.
 
-- progression-pressure event frequency
-- checks during progression-pressure events
-- waiting-player count
-- external progression for waiting players
-- completion position relative to the last completing player
-- fraction of peers still active at completion
-- idle-step frequency
-- idle fraction before completion
-- longest idle streak
+Each event reports:
 
-Separate rankings are emitted for progression pressure, early completion, and idle time.
+- host sendable checks
+- median sendable checks among other active peers
+- host workload ratio to that peer median
+- waiting players
+- external progression for those waiting players
 
-Completion is evaluated using each world's Archipelago completion condition while replaying the same logical-sphere progression used by Archipelago. A condition that is already true at the initial state is rejected for timeline use. Fallbacks are explicitly labeled as `last_progression_event_proxy`, `last_sendable_check_proxy`, or `completion_unavailable`.
+v0.9 does not impose a universal bottleneck threshold.
+
+## Early completion
+
+Reports goal-completion position relative to the last completing player and the fraction of peers still active at completion.
+
+## Check starvation
+
+Reports:
+
+- seeds with starvation
+- starvation steps
+- starvation fraction before completion
+- longest starvation streak
+
+## Early release
+
+At goal completion, all later sendable locations hosted by that player are treated as released.
+
+Reports:
+
+- remaining checks released
+- remaining progression items released
+- external progression released
+- recipient players affected
+- release size relative to active-peer workload at completion
+
+Early completion and early release remain separate conditions.
+
+## Completion detection
+
+Completion is evaluated using each world's Archipelago completion condition while replaying logical-sphere progression. Fallbacks are explicitly labeled as:
+
+- `last_progression_event_proxy`
+- `last_sendable_check_proxy`
+- `completion_unavailable`
 
 ## Secondary commands
 
@@ -59,6 +100,4 @@ apbalance analyze Player.yaml --archipelago "C:\path\to\Archipelago" --samples 1
 apbalance config Player.yaml --output config.json
 ```
 
-## Status
-
-Player skill and real-world check duration are not modeled. Progression Balancing mitigation analysis is not yet implemented.
+Progression Balancing mitigation analysis is not yet implemented.
