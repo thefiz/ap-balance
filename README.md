@@ -2,19 +2,17 @@
 
 Archipelago YAML analysis tool.
 
-## Current features
+## Features
 
 - Single YAML inspection
 - Optional custom `.apworld`
 - Local Archipelago generation
-- Logical and sendable sphere extraction
-- World/location/progression counts
-- Single-seed sphere analysis:
-  - sphere width statistics
-  - early cumulative workload
-  - thin-sphere detection
-  - wide-sphere detection
-  - progression dilution
+- Logical/sendable sphere extraction
+- Single-seed analysis
+- Multi-seed simulation and aggregate statistics
+- Mid-run thin-sphere and consecutive-thin detection
+- Post-opening wide-sphere detection
+- Sendable progression dilution
 
 ## Requirements
 
@@ -33,31 +31,33 @@ pip install -r "C:\path\to\Archipelago\requirements.txt"
 
 ## Usage
 
+Single seed:
+
 ```powershell
 apbalance inspect Player.yaml --archipelago "C:\path\to\Archipelago"
+```
+
+Multi-seed simulation:
+
+```powershell
+apbalance analyze Player.yaml `
+  --archipelago "C:\path\to\Archipelago" `
+  --samples 100 `
+  --output analysis.json
 ```
 
 Custom world:
 
 ```powershell
-apbalance inspect Player.yaml `
+apbalance analyze Player.yaml `
   --archipelago "C:\path\to\Archipelago" `
-  --apworld ExampleGame.apworld
-```
-
-Deterministic seed and file output:
-
-```powershell
-apbalance inspect Player.yaml `
-  --archipelago "C:\path\to\Archipelago" `
-  --seed 123456 `
-  --output result.json
+  --apworld ExampleGame.apworld `
+  --samples 100
 ```
 
 ## Roadmap
 
-- Multi-seed simulation
-- Variance and percentile reporting
 - Progression balancing recommendations
 - Same-game baselines
+- Cross-game normalization
 - Group multiworld analysis

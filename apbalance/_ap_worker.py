@@ -128,7 +128,7 @@ def main() -> int:
 
     result = {
         "schema_version": 1,
-        "analyzer_version": "0.2.0",
+        "analyzer_version": "0.3.1",
         "archipelago_version": getattr(Utils, "__version__", None),
         "seed": seed,
         "seed_name": multiworld.seed_name,
