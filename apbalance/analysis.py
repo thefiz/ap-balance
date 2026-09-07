@@ -4,9 +4,10 @@ from statistics import mean, median
 from typing import Any
 
 
-DEFAULT_THIN_SPHERE_MAX = 3
-DEFAULT_WIDE_SPHERE_MIN = 30
 EARLY_SPHERE_COUNT = 5
+RELATIVE_WIDE_MULTIPLIER = 2.5
+RELATIVE_THIN_MULTIPLIER = 0.35
+CONCENTRATION_TOP_N = 3
 
 
 def _sphere_widths(spheres: list[dict[str, Any]]) -> list[int]:
@@ -50,62 +51,81 @@ def _consecutive_runs(indices: list[int]) -> list[list[int]]:
     return runs
 
 
+def _safe_ratio(numerator: float, denominator: float) -> float | None:
+    if denominator == 0:
+        return None
+    return round(numerator / denominator, 3)
+
+
 def analyze_single_seed(
     spheres: list[dict[str, Any]],
     *,
-    thin_sphere_max: int = DEFAULT_THIN_SPHERE_MAX,
-    wide_sphere_min: int = DEFAULT_WIDE_SPHERE_MIN,
     early_sphere_count: int = EARLY_SPHERE_COUNT,
+    relative_wide_multiplier: float = RELATIVE_WIDE_MULTIPLIER,
+    relative_thin_multiplier: float = RELATIVE_THIN_MULTIPLIER,
+    concentration_top_n: int = CONCENTRATION_TOP_N,
 ) -> dict[str, Any]:
     widths = _sphere_widths(spheres)
     progression = _progression_counts(spheres)
     sendable_progression = _sendable_progression_counts(spheres)
-    cumulative_checks = _cumulative(widths)
 
     if not widths:
-        return {
-            "sphere_width": {},
-            "early_workload": {},
-            "thin_spheres": {},
-            "wide_spheres": {},
-            "progression_dilution": {},
-        }
+        return {}
 
     terminal_index = len(widths) - 1
+    nonterminal_widths = widths[:-1] if len(widths) > 1 else widths[:]
+    typical_width = median(nonterminal_widths) if nonterminal_widths else median(widths)
+    total_checks = sum(widths)
 
-    all_thin = [
-        {
-            "index": index,
-            "checks": width,
-            "progression_items": progression[index],
-            "sendable_progression_items": sendable_progression[index],
-            "terminal": index == terminal_index,
-        }
-        for index, width in enumerate(widths)
-        if width <= thin_sphere_max
+    relative_wide = []
+    relative_thin = []
+
+    for index, width in enumerate(widths):
+        terminal = index == terminal_index
+        ratio = _safe_ratio(width, typical_width)
+
+        if not terminal and ratio is not None and ratio >= relative_wide_multiplier:
+            relative_wide.append({
+                "index": index,
+                "checks": width,
+                "relative_to_typical": ratio,
+                "share_of_all_checks": _safe_ratio(width, total_checks),
+                "progression_items": progression[index],
+                "sendable_progression_items": sendable_progression[index],
+            })
+
+        if not terminal and ratio is not None and ratio <= relative_thin_multiplier:
+            relative_thin.append({
+                "index": index,
+                "checks": width,
+                "relative_to_typical": ratio,
+                "progression_items": progression[index],
+                "sendable_progression_items": sendable_progression[index],
+            })
+
+    thin_indices = [entry["index"] for entry in relative_thin]
+    thin_runs = _consecutive_runs(thin_indices)
+
+    sorted_widths = sorted(
+        enumerate(widths),
+        key=lambda pair: pair[1],
+        reverse=True,
+    )
+    top = sorted_widths[: min(concentration_top_n, len(sorted_widths))]
+    top_checks = sum(width for _, width in top)
+
+    width_changes = [
+        abs(widths[i] - widths[i - 1])
+        for i in range(1, len(widths))
+    ]
+    relative_changes = [
+        abs(widths[i] - widths[i - 1]) / typical_width
+        for i in range(1, len(widths))
+        if typical_width
     ]
 
-    mid_thin = [entry for entry in all_thin if not entry["terminal"]]
-    mid_thin_indices = [entry["index"] for entry in mid_thin]
-    thin_runs = _consecutive_runs(mid_thin_indices)
-
-    all_wide = [
-        {
-            "index": index,
-            "checks": width,
-            "progression_items": progression[index],
-            "sendable_progression_items": sendable_progression[index],
-            "opening": index == 0,
-            "early": index < early_sphere_count,
-        }
-        for index, width in enumerate(widths)
-        if width >= wide_sphere_min
-    ]
-
-    post_opening_wide = [entry for entry in all_wide if not entry["opening"]]
-    early_post_opening_wide = [
-        entry for entry in post_opening_wide if entry["early"]
-    ]
+    cumulative = _cumulative(widths)
+    early_limit = min(early_sphere_count, len(widths))
 
     dilution = []
     sendable_dilution = []
@@ -116,63 +136,24 @@ def analyze_single_seed(
             "index": index,
             "checks": width,
             "progression_items": prog,
-            "checks_per_progression_item": (
-                round(width / prog, 3) if prog > 0 else None
-            ),
+            "checks_per_progression_item": _safe_ratio(width, prog),
         })
         sendable_dilution.append({
             "index": index,
             "checks": width,
             "sendable_progression_items": sendable_prog,
-            "checks_per_sendable_progression_item": (
-                round(width / sendable_prog, 3) if sendable_prog > 0 else None
-            ),
+            "checks_per_sendable_progression_item": _safe_ratio(width, sendable_prog),
         })
 
-    early_limit = min(early_sphere_count, len(widths))
-    early_growth = []
-    for index in range(1, early_limit):
-        previous = cumulative_checks[index - 1]
-        current = cumulative_checks[index]
-        early_growth.append({
-            "index": index,
-            "sphere_checks": widths[index],
-            "cumulative_checks": current,
-            "growth_from_previous_cumulative": current - previous,
-        })
-
-    early = {
-        "sphere_count_considered": early_limit,
-        "checks_by_sphere": [
-            {
-                "index": index,
-                "sphere_checks": widths[index],
-                "cumulative_checks": cumulative_checks[index],
-            }
-            for index in range(early_limit)
-        ],
-        "growth_after_opening": early_growth,
-        "checks_through_sphere_0": cumulative_checks[0],
-        "checks_through_sphere_1": (
-            cumulative_checks[1] if len(cumulative_checks) > 1 else cumulative_checks[-1]
-        ),
-        "checks_through_sphere_2": (
-            cumulative_checks[2] if len(cumulative_checks) > 2 else cumulative_checks[-1]
-        ),
-        "checks_through_sphere_4": (
-            cumulative_checks[4] if len(cumulative_checks) > 4 else cumulative_checks[-1]
-        ),
-    }
-
-    ratios = [
-        entry["checks_per_progression_item"]
-        for entry in dilution
-        if entry["checks_per_progression_item"] is not None
+    dilution_values = [
+        x["checks_per_progression_item"]
+        for x in dilution
+        if x["checks_per_progression_item"] is not None
     ]
-    sendable_ratios = [
-        entry["checks_per_sendable_progression_item"]
-        for entry in sendable_dilution
-        if entry["checks_per_sendable_progression_item"] is not None
+    sendable_dilution_values = [
+        x["checks_per_sendable_progression_item"]
+        for x in sendable_dilution
+        if x["checks_per_sendable_progression_item"] is not None
     ]
 
     return {
@@ -182,17 +163,37 @@ def analyze_single_seed(
             "max": max(widths),
             "mean": round(mean(widths), 3),
             "median": median(widths),
+            "nonterminal_median": typical_width,
             "largest_sphere_index": widths.index(max(widths)),
             "smallest_sphere_index": widths.index(min(widths)),
+            "largest_to_typical_ratio": _safe_ratio(max(widths), typical_width),
         },
-        "early_workload": early,
-        "thin_spheres": {
-            "threshold_max_checks": thin_sphere_max,
-            "all_count": len(all_thin),
-            "mid_progression_count": len(mid_thin),
-            "terminal_count": sum(1 for entry in all_thin if entry["terminal"]),
-            "mid_progression_spheres": mid_thin,
-            "terminal_spheres": [entry for entry in all_thin if entry["terminal"]],
+        "workload_concentration": {
+            "largest_sphere_share": _safe_ratio(max(widths), total_checks),
+            "top_n": len(top),
+            "top_n_share": _safe_ratio(top_checks, total_checks),
+            "top_spheres": [
+                {
+                    "index": index,
+                    "checks": width,
+                    "share_of_all_checks": _safe_ratio(width, total_checks),
+                }
+                for index, width in top
+            ],
+        },
+        "relative_wide_spheres": {
+            "threshold_multiplier": relative_wide_multiplier,
+            "count": len(relative_wide),
+            "spheres": relative_wide,
+            "max_relative_width": max(
+                (entry["relative_to_typical"] for entry in relative_wide),
+                default=0,
+            ),
+        },
+        "relative_thin_spheres": {
+            "threshold_multiplier": relative_thin_multiplier,
+            "count": len(relative_thin),
+            "spheres": relative_thin,
             "consecutive_runs": [
                 {
                     "start": run[0],
@@ -204,28 +205,45 @@ def analyze_single_seed(
             ],
             "longest_consecutive_run": max((len(run) for run in thin_runs), default=0),
         },
-        "wide_spheres": {
-            "threshold_min_checks": wide_sphere_min,
-            "all_count": len(all_wide),
-            "opening_count": sum(1 for entry in all_wide if entry["opening"]),
-            "post_opening_count": len(post_opening_wide),
-            "early_post_opening_count": len(early_post_opening_wide),
-            "opening_spheres": [entry for entry in all_wide if entry["opening"]],
-            "post_opening_spheres": post_opening_wide,
-            "early_post_opening_spheres": early_post_opening_wide,
+        "pacing_volatility": {
+            "mean_absolute_width_change": (
+                round(mean(width_changes), 3) if width_changes else 0
+            ),
+            "mean_relative_width_change": (
+                round(mean(relative_changes), 3) if relative_changes else 0
+            ),
+            "max_relative_width_change": (
+                round(max(relative_changes), 3) if relative_changes else 0
+            ),
+        },
+        "early_workload": {
+            "sphere_count_considered": early_limit,
+            "checks_through_sphere_0": cumulative[0],
+            "checks_through_sphere_1": cumulative[min(1, len(cumulative) - 1)],
+            "checks_through_sphere_2": cumulative[min(2, len(cumulative) - 1)],
+            "checks_through_sphere_4": cumulative[min(4, len(cumulative) - 1)],
+            "share_through_sphere_1": _safe_ratio(
+                cumulative[min(1, len(cumulative) - 1)], total_checks
+            ),
+            "share_through_sphere_2": _safe_ratio(
+                cumulative[min(2, len(cumulative) - 1)], total_checks
+            ),
+            "share_through_sphere_4": _safe_ratio(
+                cumulative[min(4, len(cumulative) - 1)], total_checks
+            ),
         },
         "progression_dilution": {
             "median_checks_per_progression_item": (
-                median(ratios) if ratios else None
+                median(dilution_values) if dilution_values else None
             ),
             "max_checks_per_progression_item": (
-                max(ratios) if ratios else None
+                max(dilution_values) if dilution_values else None
             ),
             "median_checks_per_sendable_progression_item": (
-                median(sendable_ratios) if sendable_ratios else None
+                median(sendable_dilution_values) if sendable_dilution_values else None
             ),
             "max_checks_per_sendable_progression_item": (
-                max(sendable_ratios) if sendable_ratios else None
+                max(sendable_dilution_values) if sendable_dilution_values else None
             ),
             "spheres": dilution,
             "sendable_spheres": sendable_dilution,

@@ -6,6 +6,7 @@ from typing import Any
 import random
 
 from .aggregate import aggregate_samples
+from .configuration import describe_configuration
 from .runner import inspect_yaml
 
 
@@ -58,15 +59,17 @@ def analyze_yaml(
         raise RuntimeError("One or more simulation samples did not complete.")
 
     first = completed[0]
+    configuration = describe_configuration(yaml_path)
 
     return {
         "schema_version": 1,
-        "analyzer_version": "0.3.1",
+        "analyzer_version": "0.8.2",
         "mode": "multi_seed",
         "game": first["game"],
         "world_version": first.get("world_version"),
         "archipelago_version": first.get("archipelago_version"),
         "player": first["player"],
+        "configuration": configuration,
         "simulation": {
             "samples": samples,
             "base_seed": base_seed,

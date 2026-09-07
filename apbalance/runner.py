@@ -122,3 +122,134 @@ def inspect_yaml(
                 f"stdout:\n{proc.stdout}\n"
                 f"stderr:\n{proc.stderr}"
             ) from exc
+
+
+
+def _validate_group_inputs(
+    players_path: Path,
+    archipelago_path: Path,
+    apworld_paths: list[Path] | None,
+) -> tuple[Path, Path, list[Path]]:
+    players_path = players_path.expanduser().resolve()
+    archipelago_path = archipelago_path.expanduser().resolve()
+    apworld_paths = [
+        path.expanduser().resolve()
+        for path in (apworld_paths or [])
+    ]
+
+    if not players_path.is_dir():
+        raise FileNotFoundError(f"Players directory not found: {players_path}")
+
+    yaml_files = sorted([
+        path for path in players_path.iterdir()
+        if path.is_file() and path.suffix.lower() in {".yaml", ".yml"}
+    ])
+    if len(yaml_files) < 2:
+        raise ValueError("Group analysis requires at least two player YAML files.")
+
+    if not archipelago_path.is_dir():
+        raise FileNotFoundError(f"Archipelago directory not found: {archipelago_path}")
+
+    required = ["Generate.py", "Main.py", "BaseClasses.py", "worlds"]
+    missing = [name for name in required if not (archipelago_path / name).exists()]
+    if missing:
+        raise ValueError(
+            "The supplied Archipelago path does not look like an Archipelago "
+            f"source/install tree. Missing: {', '.join(missing)}"
+        )
+
+    for path in apworld_paths:
+        if not path.is_file():
+            raise FileNotFoundError(f"APWorld not found: {path}")
+        if path.suffix.lower() != ".apworld":
+            raise ValueError(f"Expected .apworld: {path}")
+
+    return players_path, archipelago_path, apworld_paths
+
+
+def inspect_group(
+    players_path: Path,
+    archipelago_path: Path,
+    *,
+    apworld_paths: list[Path] | None = None,
+    seed: int | None = None,
+) -> dict[str, Any]:
+    players_path, archipelago_path, apworld_paths = _validate_group_inputs(
+        players_path, archipelago_path, apworld_paths
+    )
+
+    yaml_files = sorted([
+        path for path in players_path.iterdir()
+        if path.is_file() and path.suffix.lower() in {".yaml", ".yml"}
+    ])
+
+    package_root = Path(__file__).resolve().parent
+    worker_path = package_root / "_ap_worker.py"
+
+    with tempfile.TemporaryDirectory(prefix="apbalance-group-") as temp:
+        temp_path = Path(temp)
+        staged_players = temp_path / "Players"
+        staged_players.mkdir()
+
+        for yaml_file in yaml_files:
+            shutil.copy2(yaml_file, staged_players / yaml_file.name)
+
+        custom_worlds = archipelago_path / "custom_worlds"
+        staged_apworlds: list[Path] = []
+
+        try:
+            if apworld_paths:
+                custom_worlds.mkdir(parents=True, exist_ok=True)
+
+            for apworld_path in apworld_paths:
+                staged = custom_worlds / apworld_path.name
+                if staged.exists():
+                    raise FileExistsError(
+                        f"Refusing to overwrite existing custom world: {staged}. "
+                        "Omit that --apworld if it is already installed."
+                    )
+                shutil.copy2(apworld_path, staged)
+                staged_apworlds.append(staged)
+
+            cmd = [
+                sys.executable,
+                str(worker_path),
+                "--archipelago", str(archipelago_path),
+                "--players", str(staged_players),
+                "--multi", str(len(yaml_files)),
+                "--group",
+            ]
+            if seed is not None:
+                cmd.extend(["--seed", str(seed)])
+
+            env = os.environ.copy()
+            env["PYTHONUNBUFFERED"] = "1"
+
+            proc = subprocess.run(
+                cmd,
+                cwd=archipelago_path,
+                env=env,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+        finally:
+            for staged in staged_apworlds:
+                if staged.exists():
+                    staged.unlink()
+
+        if proc.returncode != 0:
+            details = proc.stderr.strip() or proc.stdout.strip()
+            raise RuntimeError(
+                "Archipelago group generation/inspection failed."
+                + (f"\n{details}" if details else "")
+            )
+
+        try:
+            return json.loads(proc.stdout)
+        except json.JSONDecodeError as exc:
+            raise RuntimeError(
+                "Worker returned invalid JSON.\n"
+                f"stdout:\n{proc.stdout}\n"
+                f"stderr:\n{proc.stderr}"
+            ) from exc
