@@ -186,6 +186,17 @@ def analyze_group(
                 "bottleneck_candidate_seed_frequency": round(
                     bottleneck_candidate_seed_count / samples, 3
                 ),
+                "bottleneck_exposure_index": (
+                    round(
+                        (bottleneck_candidate_seed_count / samples)
+                        * (
+                            _summarize(candidate_workload_ratios)["median"]
+                            if _summarize(candidate_workload_ratios)["median"] is not None
+                            else 0
+                        ),
+                        3,
+                    )
+                ),
                 "dependency_events_per_seed": _summarize([
                     row["progression_bottleneck"]["dependency_event_count"]
                     for row in seed_rows
@@ -260,10 +271,11 @@ def analyze_group(
     bottleneck_ranking = sorted(
         players_out,
         key=lambda p: (
+            p["progression_bottleneck"]["bottleneck_exposure_index"],
+            p["progression_bottleneck"]["bottleneck_candidate_seed_frequency"],
             p["progression_bottleneck"]["candidate_workload_ratio_to_active_peer_median"]["median"] or 0,
             p["progression_bottleneck"]["candidate_external_progression_for_waiting_players"]["median"] or 0,
             p["progression_bottleneck"]["candidate_waiting_players"]["median"] or 0,
-            p["progression_bottleneck"]["bottleneck_candidate_seed_frequency"],
         ),
         reverse=True,
     )
@@ -298,7 +310,7 @@ def analyze_group(
 
     return {
         "schema_version": 2,
-        "analyzer_version": "0.9.1",
+        "analyzer_version": "0.9.2",
         "mode": "group_multi_seed",
         "archipelago_version": first.get("archipelago_version"),
         "analysis_assumptions": ASSUMPTIONS,
@@ -314,6 +326,8 @@ def analyze_group(
                     "id": p["id"],
                     "name": p["name"],
                     "game": p["game"],
+                    "bottleneck_exposure_index":
+                        p["progression_bottleneck"]["bottleneck_exposure_index"],
                     "bottleneck_candidate_seed_frequency":
                         p["progression_bottleneck"]["bottleneck_candidate_seed_frequency"],
                     "dependency_seed_frequency":

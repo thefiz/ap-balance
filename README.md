@@ -6,7 +6,7 @@ Archipelago multiworld pacing and outlier analysis.
 
 Analyze a group of player YAMLs together and identify recurring structural pacing risks.
 
-v0.9.1 reports four separate conditions:
+v0.9.2 reports four separate conditions:
 
 - progression bottleneck
 - early completion
@@ -55,7 +55,9 @@ Each event reports:
 - waiting players
 - external progression for those waiting players
 
-v0.9.1 does not impose a universal workload-ratio threshold. Raw dependency events remain in the output for auditability.
+v0.9.2 does not impose a universal workload-ratio threshold. Raw dependency events remain in the output for auditability.
+
+Bottleneck ranking uses `bottleneck_exposure_index = bottleneck_candidate_seed_frequency × median_candidate_workload_ratio_to_active_peer_median`, so persistent severe candidates rank above rare severe candidates.
 
 ## Early completion
 

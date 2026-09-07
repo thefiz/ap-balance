@@ -63,7 +63,7 @@ def analyze_yaml(
 
     return {
         "schema_version": 1,
-        "analyzer_version": "0.9.1",
+        "analyzer_version": "0.9.2",
         "mode": "multi_seed",
         "game": first["game"],
         "world_version": first.get("world_version"),
