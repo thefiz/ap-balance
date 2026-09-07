@@ -6,7 +6,7 @@ Archipelago multiworld pacing and outlier analysis.
 
 Analyze a group of player YAMLs together and identify recurring structural pacing risks.
 
-v0.9 reports four separate conditions:
+v0.9.1 reports four separate conditions:
 
 - progression bottleneck
 - early completion
@@ -45,7 +45,7 @@ apbalance group ".\Players" `
 
 ## Progression bottleneck
 
-A dependency event occurs when an unfinished player has no sendable checks and progression for that player is hosted in another unfinished player's current workload.
+A dependency event occurs when an unfinished player has no sendable checks and progression for that player is hosted in another unfinished player's current workload. A dependency event becomes a bottleneck candidate only when that host is the unique highest-workload active player in the same progression step.
 
 Each event reports:
 
@@ -55,7 +55,7 @@ Each event reports:
 - waiting players
 - external progression for those waiting players
 
-v0.9 does not impose a universal bottleneck threshold.
+v0.9.1 does not impose a universal workload-ratio threshold. Raw dependency events remain in the output for auditability.
 
 ## Early completion
 
@@ -72,7 +72,7 @@ Reports:
 
 ## Early release
 
-At goal completion, all later sendable locations hosted by that player are treated as released.
+At goal completion, later hosted checks are definitely released, while checks in the completion sphere have unknown within-sphere order. Release impact is therefore reported as minimum, expected, and maximum. Expected assumes a neutral 50% of completion-sphere hosted checks remain.
 
 Reports:
 

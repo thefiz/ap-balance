@@ -216,53 +216,110 @@ def _median(values):
     return (values[middle - 1] + values[middle]) / 2
 
 
-def _release_payload(logical_spheres, host: int, completion_step: int | None) -> dict:
-    """
-    Count sendable locations hosted by a player that occur strictly after that
-    player's goal-completion sphere. Under the standard release-on-goal
-    assumption, these become available immediately when the player completes.
-    """
-    if completion_step is None:
-        return {
-            "released_checks": 0,
-            "released_progression_items": 0,
-            "released_external_progression_items": 0,
-            "recipient_players": [],
-            "recipient_player_count": 0,
-        }
 
-    released_checks = 0
-    released_progression = 0
-    released_external_progression = 0
+def _count_release_locations(logical_spheres, host: int, predicate) -> dict:
+    checks = 0
+    progression = 0
+    external_progression = 0
     recipients = set()
 
     for sphere in logical_spheres:
-        if sphere["index"] <= completion_step:
+        if not predicate(sphere["index"]):
             continue
 
         for location in sphere["locations"]:
             if not location["sendable"] or int(location["player"]) != host:
                 continue
 
-            released_checks += 1
+            checks += 1
 
             if location["progression"]:
-                released_progression += 1
+                progression += 1
                 if (
                     location["item_player"] is not None
                     and int(location["item_player"]) != host
                 ):
-                    released_external_progression += 1
+                    external_progression += 1
                     recipients.add(int(location["item_player"]))
 
     return {
-        "released_checks": released_checks,
-        "released_progression_items": released_progression,
-        "released_external_progression_items": released_external_progression,
+        "checks": checks,
+        "progression_items": progression,
+        "external_progression_items": external_progression,
         "recipient_players": sorted(recipients),
-        "recipient_player_count": len(recipients),
     }
 
+
+def _release_payload(logical_spheres, host: int, completion_step: int | None) -> dict:
+    """
+    Estimate release-on-goal impact.
+
+    Logical spheres do not encode the within-sphere order in which checks are
+    completed, so the completion sphere is inherently uncertain:
+
+      minimum  = only hosted checks in later spheres
+      maximum  = all hosted checks in the completion sphere plus later spheres
+      expected = minimum + 50% of completion-sphere hosted checks
+
+    The expected value is a neutral within-sphere ordering estimate, not a claim
+    about actual player routing.
+    """
+    if completion_step is None:
+        return {
+            "released_checks_min": 0,
+            "released_checks_expected": 0.0,
+            "released_checks_max": 0,
+            "released_progression_items_min": 0,
+            "released_progression_items_expected": 0.0,
+            "released_progression_items_max": 0,
+            "released_external_progression_items_min": 0,
+            "released_external_progression_items_expected": 0.0,
+            "released_external_progression_items_max": 0,
+            "recipient_players_min": [],
+            "recipient_players_max": [],
+            "recipient_player_count_min": 0,
+            "recipient_player_count_max": 0,
+            "completion_sphere_hosted_checks": 0,
+        }
+
+    later = _count_release_locations(
+        logical_spheres,
+        host,
+        lambda index: index > completion_step,
+    )
+    same = _count_release_locations(
+        logical_spheres,
+        host,
+        lambda index: index == completion_step,
+    )
+
+    min_recipients = set(later["recipient_players"])
+    max_recipients = min_recipients | set(same["recipient_players"])
+
+    return {
+        "released_checks_min": later["checks"],
+        "released_checks_expected": round(later["checks"] + same["checks"] * 0.5, 3),
+        "released_checks_max": later["checks"] + same["checks"],
+        "released_progression_items_min": later["progression_items"],
+        "released_progression_items_expected": round(
+            later["progression_items"] + same["progression_items"] * 0.5, 3
+        ),
+        "released_progression_items_max":
+            later["progression_items"] + same["progression_items"],
+        "released_external_progression_items_min": later["external_progression_items"],
+        "released_external_progression_items_expected": round(
+            later["external_progression_items"]
+            + same["external_progression_items"] * 0.5,
+            3,
+        ),
+        "released_external_progression_items_max":
+            later["external_progression_items"] + same["external_progression_items"],
+        "recipient_players_min": sorted(min_recipients),
+        "recipient_players_max": sorted(max_recipients),
+        "recipient_player_count_min": len(min_recipients),
+        "recipient_player_count_max": len(max_recipients),
+        "completion_sphere_hosted_checks": same["checks"],
+    }
 
 def timeline_analysis(multiworld, logical_spheres, completion_steps, completion_detection) -> dict:
     player_ids = list(range(1, multiworld.players + 1))
@@ -374,12 +431,27 @@ def timeline_analysis(multiworld, logical_spheres, completion_steps, completion_
                 for recipient in waiting_recipients
             )
 
+            active_workloads = {
+                player: effective_checks_by_player[player]
+                for player in active_unfinished
+            }
+            highest_workload = max(active_workloads.values()) if active_workloads else 0
+            highest_players = [
+                player
+                for player, value in active_workloads.items()
+                if value == highest_workload
+            ]
+            unique_highest_workload = (
+                len(highest_players) == 1 and highest_players[0] == host
+            )
+
             event = {
                 "step": step,
                 "host": host,
                 "host_sendable_checks": effective_checks_by_player[host],
                 "active_peer_median_sendable_checks": active_peer_median,
                 "workload_ratio_to_active_peer_median": workload_ratio,
+                "host_is_unique_highest_active_workload": unique_highest_workload,
                 "waiting_players": waiting_recipients,
                 "waiting_player_count": len(waiting_recipients),
                 "external_progression_for_waiting_players": external_for_waiting,
@@ -405,14 +477,26 @@ def timeline_analysis(multiworld, logical_spheres, completion_steps, completion_
             peer_median = _median(peer_workloads)
 
             if peer_median is None or peer_median == 0:
-                release_ratio = None
+                release_ratio_min = None
+                release_ratio_expected = None
+                release_ratio_max = None
             else:
-                release_ratio = round(payload["released_checks"] / peer_median, 3)
+                release_ratio_min = round(
+                    payload["released_checks_min"] / peer_median, 3
+                )
+                release_ratio_expected = round(
+                    payload["released_checks_expected"] / peer_median, 3
+                )
+                release_ratio_max = round(
+                    payload["released_checks_max"] / peer_median, 3
+                )
 
             release_events.append({
                 "player": player,
                 **payload,
-                "release_checks_ratio_to_active_peer_median": release_ratio,
+                "release_checks_ratio_to_active_peer_median_min": release_ratio_min,
+                "release_checks_ratio_to_active_peer_median_expected": release_ratio_expected,
+                "release_checks_ratio_to_active_peer_median_max": release_ratio_max,
             })
 
         rows.append({
@@ -498,21 +582,41 @@ def timeline_analysis(multiworld, logical_spheres, completion_steps, completion_
 
         completion_peer_median = _median(completion_peer_workloads)
         if completion_peer_median is None or completion_peer_median == 0:
-            release_ratio = None
+            release_ratio_min = None
+            release_ratio_expected = None
+            release_ratio_max = None
         else:
-            release_ratio = round(
-                release_payload["released_checks"] / completion_peer_median, 3
+            release_ratio_min = round(
+                release_payload["released_checks_min"] / completion_peer_median, 3
+            )
+            release_ratio_expected = round(
+                release_payload["released_checks_expected"] / completion_peer_median, 3
+            )
+            release_ratio_max = round(
+                release_payload["released_checks_max"] / completion_peer_median, 3
+            )
+
+        if completion_position is None or release_ratio_expected is None:
+            early_release_index = None
+        else:
+            early_release_index = round(
+                (1.0 - completion_position) * release_ratio_expected,
+                3,
             )
 
         dependency_events = player_events[player]["dependency_events"]
+        bottleneck_candidates = [
+            event
+            for event in dependency_events
+            if event["host_is_unique_highest_active_workload"]
+        ]
 
         players[str(player)] = {
             "progression_bottleneck": {
-                # These are dependency events with group-relative workload
-                # measurements. v0.9 deliberately does not impose a universal
-                # GOOD/BAD threshold.
-                "event_count": len(dependency_events),
-                "events": dependency_events,
+                "dependency_event_count": len(dependency_events),
+                "dependency_events": dependency_events,
+                "candidate_event_count": len(bottleneck_candidates),
+                "candidate_events": bottleneck_candidates,
             },
             "early_completion": {
                 "completion_step": completion_step,
@@ -532,7 +636,10 @@ def timeline_analysis(multiworld, logical_spheres, completion_steps, completion_
             },
             "early_release": {
                 **release_payload,
-                "release_checks_ratio_to_active_peer_median": release_ratio,
+                "release_checks_ratio_to_active_peer_median_min": release_ratio_min,
+                "release_checks_ratio_to_active_peer_median_expected": release_ratio_expected,
+                "release_checks_ratio_to_active_peer_median_max": release_ratio_max,
+                "early_release_index": early_release_index,
             },
         }
 
@@ -608,7 +715,7 @@ def main() -> int:
 
         result = {
             "schema_version": 1,
-            "analyzer_version": "0.9.0",
+            "analyzer_version": "0.9.1",
             "archipelago_version": getattr(Utils, "__version__", None),
             "seed": seed,
             "seed_name": multiworld.seed_name,
@@ -650,7 +757,7 @@ def main() -> int:
 
         result = {
             "schema_version": 1,
-            "analyzer_version": "0.9.0",
+            "analyzer_version": "0.9.1",
             "archipelago_version": getattr(Utils, "__version__", None),
             "seed": seed,
             "seed_name": multiworld.seed_name,

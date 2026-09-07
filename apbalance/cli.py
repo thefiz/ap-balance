@@ -221,7 +221,7 @@ def main() -> int:
         try:
             result = {
                 "schema_version": 1,
-                "analyzer_version": "0.9.0",
+                "analyzer_version": "0.9.1",
                 "mode": "configuration",
                 "configuration": describe_configuration(args.yaml),
             }

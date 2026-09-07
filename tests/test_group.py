@@ -2,24 +2,31 @@ from pathlib import Path
 import apbalance.group as group_module
 
 
-def _event(checks, ratio, waiting=1, external=2):
+def _event(checks, ratio, candidate=True, waiting=1, external=2):
     return {
         "step": 1,
         "host": 1,
         "host_sendable_checks": checks,
         "active_peer_median_sendable_checks": checks / ratio,
         "workload_ratio_to_active_peer_median": ratio,
+        "host_is_unique_highest_active_workload": candidate,
         "waiting_players": [2],
         "waiting_player_count": waiting,
         "external_progression_for_waiting_players": external,
     }
 
 
-def _player(pressure, starvation, finish, peers, released):
+def _player(events, starvation, finish, peers, release_expected):
+    candidates = [
+        event for event in events
+        if event["host_is_unique_highest_active_workload"]
+    ]
     return {
         "progression_bottleneck": {
-            "event_count": len(pressure),
-            "events": pressure,
+            "dependency_event_count": len(events),
+            "dependency_events": events,
+            "candidate_event_count": len(candidates),
+            "candidate_events": candidates,
         },
         "early_completion": {
             "completion_step": 2,
@@ -35,12 +42,24 @@ def _player(pressure, starvation, finish, peers, released):
             "longest_starvation_streak": starvation,
         },
         "early_release": {
-            "released_checks": released,
-            "released_progression_items": max(0, released // 5),
-            "released_external_progression_items": max(0, released // 10),
-            "recipient_players": [2] if released else [],
-            "recipient_player_count": 1 if released else 0,
-            "release_checks_ratio_to_active_peer_median": released / 10 if released else 0,
+            "released_checks_min": max(0, release_expected - 5),
+            "released_checks_expected": release_expected,
+            "released_checks_max": release_expected + 5,
+            "released_progression_items_min": 1,
+            "released_progression_items_expected": 2,
+            "released_progression_items_max": 3,
+            "released_external_progression_items_min": 1,
+            "released_external_progression_items_expected": 2,
+            "released_external_progression_items_max": 3,
+            "recipient_players_min": [2],
+            "recipient_players_max": [2],
+            "recipient_player_count_min": 1,
+            "recipient_player_count_max": 1,
+            "completion_sphere_hosted_checks": 10,
+            "release_checks_ratio_to_active_peer_median_min": 1.0,
+            "release_checks_ratio_to_active_peer_median_expected": 2.0,
+            "release_checks_ratio_to_active_peer_median_max": 3.0,
+            "early_release_index": (1 - finish) * 2.0,
         },
     }
 
@@ -56,8 +75,8 @@ def _sample(seed):
         ],
         "timeline_analysis": {
             "players": {
-                "1": _player([_event(40, 4.0)], 0, 0.4, 1.0, 50),
-                "2": _player([], 2, 1.0, 0.0, 0),
+                "1": _player([_event(40, 4.0, True)], 0, 0.4, 1.0, 50),
+                "2": _player([_event(10, 0.5, False)], 2, 1.0, 0.0, 0),
             }
         },
     }
@@ -79,10 +98,11 @@ def test_group_rankings(monkeypatch):
     )
 
     assert result["schema_version"] == 2
+    assert result["analyzer_version"] == "0.9.1"
     assert result["rankings"]["progression_bottleneck"][0]["name"] == "A"
     assert result["rankings"]["early_completion"][0]["name"] == "A"
     assert result["rankings"]["check_starvation"][0]["name"] == "B"
     assert result["rankings"]["early_release"][0]["name"] == "A"
-    assert result["players"][0]["progression_bottleneck"]["seed_frequency"] == 1.0
-    assert result["players"][1]["check_starvation"]["seed_frequency"] == 1.0
+    assert result["players"][0]["progression_bottleneck"]["bottleneck_candidate_seed_frequency"] == 1.0
+    assert result["players"][1]["progression_bottleneck"]["bottleneck_candidate_seed_frequency"] == 0.0
     assert len(result["analysis_assumptions"]) == 3

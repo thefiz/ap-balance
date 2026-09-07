@@ -93,14 +93,19 @@ def analyze_group(
                 **player_result,
             })
 
-        bottleneck_events = [
+        dependency_events = [
             event
             for row in seed_rows
-            for event in row["progression_bottleneck"]["events"]
+            for event in row["progression_bottleneck"]["dependency_events"]
         ]
-        workload_ratios = [
+        bottleneck_candidates = [
+            event
+            for row in seed_rows
+            for event in row["progression_bottleneck"]["candidate_events"]
+        ]
+        candidate_workload_ratios = [
             event["workload_ratio_to_active_peer_median"]
-            for event in bottleneck_events
+            for event in bottleneck_candidates
             if event["workload_ratio_to_active_peer_median"] is not None
         ]
         completion_positions = [
@@ -118,28 +123,51 @@ def analyze_group(
             for row in seed_rows
             if row["check_starvation"]["starvation_fraction_before_completion"] is not None
         ]
-        released_checks = [
-            row["early_release"]["released_checks"] for row in seed_rows
+        released_checks_min = [
+            row["early_release"]["released_checks_min"] for row in seed_rows
         ]
-        released_progression = [
-            row["early_release"]["released_progression_items"] for row in seed_rows
+        released_checks_expected = [
+            row["early_release"]["released_checks_expected"] for row in seed_rows
         ]
-        released_external = [
-            row["early_release"]["released_external_progression_items"]
+        released_checks_max = [
+            row["early_release"]["released_checks_max"] for row in seed_rows
+        ]
+        released_external_min = [
+            row["early_release"]["released_external_progression_items_min"]
             for row in seed_rows
         ]
-        release_recipients = [
-            row["early_release"]["recipient_player_count"] for row in seed_rows
-        ]
-        release_ratios = [
-            row["early_release"]["release_checks_ratio_to_active_peer_median"]
+        released_external_expected = [
+            row["early_release"]["released_external_progression_items_expected"]
             for row in seed_rows
-            if row["early_release"]["release_checks_ratio_to_active_peer_median"] is not None
+        ]
+        released_external_max = [
+            row["early_release"]["released_external_progression_items_max"]
+            for row in seed_rows
+        ]
+        release_recipients_min = [
+            row["early_release"]["recipient_player_count_min"] for row in seed_rows
+        ]
+        release_recipients_max = [
+            row["early_release"]["recipient_player_count_max"] for row in seed_rows
+        ]
+        release_ratios_expected = [
+            row["early_release"]["release_checks_ratio_to_active_peer_median_expected"]
+            for row in seed_rows
+            if row["early_release"]["release_checks_ratio_to_active_peer_median_expected"] is not None
+        ]
+        early_release_indexes = [
+            row["early_release"]["early_release_index"]
+            for row in seed_rows
+            if row["early_release"]["early_release_index"] is not None
         ]
 
-        bottleneck_seed_count = sum(
+        dependency_seed_count = sum(
             1 for row in seed_rows
-            if row["progression_bottleneck"]["event_count"] > 0
+            if row["progression_bottleneck"]["dependency_event_count"] > 0
+        )
+        bottleneck_candidate_seed_count = sum(
+            1 for row in seed_rows
+            if row["progression_bottleneck"]["candidate_event_count"] > 0
         )
         starvation_seed_count = sum(
             1 for row in seed_rows
@@ -152,25 +180,35 @@ def analyze_group(
             "game": identity["game"],
             "samples": samples,
             "progression_bottleneck": {
-                "seeds_with_dependency_events": bottleneck_seed_count,
-                "seed_frequency": round(bottleneck_seed_count / samples, 3),
-                "events_per_seed": _summarize([
-                    row["progression_bottleneck"]["event_count"]
+                "seeds_with_dependency_events": dependency_seed_count,
+                "dependency_seed_frequency": round(dependency_seed_count / samples, 3),
+                "seeds_with_bottleneck_candidates": bottleneck_candidate_seed_count,
+                "bottleneck_candidate_seed_frequency": round(
+                    bottleneck_candidate_seed_count / samples, 3
+                ),
+                "dependency_events_per_seed": _summarize([
+                    row["progression_bottleneck"]["dependency_event_count"]
                     for row in seed_rows
                 ]),
-                "checks_during_events": _summarize([
+                "candidate_events_per_seed": _summarize([
+                    row["progression_bottleneck"]["candidate_event_count"]
+                    for row in seed_rows
+                ]),
+                "candidate_checks": _summarize([
                     event["host_sendable_checks"]
-                    for event in bottleneck_events
+                    for event in bottleneck_candidates
                 ]),
-                "workload_ratio_to_active_peer_median": _summarize(workload_ratios),
-                "waiting_players_per_event": _summarize([
+                "candidate_workload_ratio_to_active_peer_median":
+                    _summarize(candidate_workload_ratios),
+                "candidate_waiting_players": _summarize([
                     event["waiting_player_count"]
-                    for event in bottleneck_events
+                    for event in bottleneck_candidates
                 ]),
-                "external_progression_for_waiting_players_per_event": _summarize([
-                    event["external_progression_for_waiting_players"]
-                    for event in bottleneck_events
-                ]),
+                "candidate_external_progression_for_waiting_players":
+                    _summarize([
+                        event["external_progression_for_waiting_players"]
+                        for event in bottleneck_candidates
+                    ]),
             },
             "early_completion": {
                 "completion_detection": sorted({
@@ -201,11 +239,20 @@ def analyze_group(
                 ]),
             },
             "early_release": {
-                "released_checks": _summarize(released_checks),
-                "released_progression_items": _summarize(released_progression),
-                "released_external_progression_items": _summarize(released_external),
-                "recipient_player_count": _summarize(release_recipients),
-                "release_checks_ratio_to_active_peer_median": _summarize(release_ratios),
+                "released_checks_min": _summarize(released_checks_min),
+                "released_checks_expected": _summarize(released_checks_expected),
+                "released_checks_max": _summarize(released_checks_max),
+                "released_external_progression_items_min":
+                    _summarize(released_external_min),
+                "released_external_progression_items_expected":
+                    _summarize(released_external_expected),
+                "released_external_progression_items_max":
+                    _summarize(released_external_max),
+                "recipient_player_count_min": _summarize(release_recipients_min),
+                "recipient_player_count_max": _summarize(release_recipients_max),
+                "release_checks_ratio_to_active_peer_median_expected":
+                    _summarize(release_ratios_expected),
+                "early_release_index": _summarize(early_release_indexes),
             },
             "seed_results": seed_rows,
         })
@@ -213,10 +260,10 @@ def analyze_group(
     bottleneck_ranking = sorted(
         players_out,
         key=lambda p: (
-            p["progression_bottleneck"]["seed_frequency"],
-            p["progression_bottleneck"]["workload_ratio_to_active_peer_median"]["median"] or 0,
-            p["progression_bottleneck"]["waiting_players_per_event"]["median"] or 0,
-            p["progression_bottleneck"]["external_progression_for_waiting_players_per_event"]["median"] or 0,
+            p["progression_bottleneck"]["candidate_workload_ratio_to_active_peer_median"]["median"] or 0,
+            p["progression_bottleneck"]["candidate_external_progression_for_waiting_players"]["median"] or 0,
+            p["progression_bottleneck"]["candidate_waiting_players"]["median"] or 0,
+            p["progression_bottleneck"]["bottleneck_candidate_seed_frequency"],
         ),
         reverse=True,
     )
@@ -242,17 +289,16 @@ def analyze_group(
     release_ranking = sorted(
         players_out,
         key=lambda p: (
-            p["early_completion"]["peers_still_active_fraction_at_completion"]["median"] or 0,
-            p["early_release"]["release_checks_ratio_to_active_peer_median"]["median"] or 0,
-            p["early_release"]["released_external_progression_items"]["median"] or 0,
-            p["early_release"]["released_checks"]["median"] or 0,
+            p["early_release"]["early_release_index"]["median"] or 0,
+            p["early_release"]["released_external_progression_items_expected"]["median"] or 0,
+            p["early_release"]["released_checks_expected"]["median"] or 0,
         ),
         reverse=True,
     )
 
     return {
         "schema_version": 2,
-        "analyzer_version": "0.9.0",
+        "analyzer_version": "0.9.1",
         "mode": "group_multi_seed",
         "archipelago_version": first.get("archipelago_version"),
         "analysis_assumptions": ASSUMPTIONS,
@@ -268,13 +314,16 @@ def analyze_group(
                     "id": p["id"],
                     "name": p["name"],
                     "game": p["game"],
-                    "seed_frequency": p["progression_bottleneck"]["seed_frequency"],
-                    "median_workload_ratio_to_active_peer_median":
-                        p["progression_bottleneck"]["workload_ratio_to_active_peer_median"]["median"],
-                    "median_waiting_players":
-                        p["progression_bottleneck"]["waiting_players_per_event"]["median"],
-                    "median_external_progression_for_waiting_players":
-                        p["progression_bottleneck"]["external_progression_for_waiting_players_per_event"]["median"],
+                    "bottleneck_candidate_seed_frequency":
+                        p["progression_bottleneck"]["bottleneck_candidate_seed_frequency"],
+                    "dependency_seed_frequency":
+                        p["progression_bottleneck"]["dependency_seed_frequency"],
+                    "median_candidate_workload_ratio_to_active_peer_median":
+                        p["progression_bottleneck"]["candidate_workload_ratio_to_active_peer_median"]["median"],
+                    "median_candidate_waiting_players":
+                        p["progression_bottleneck"]["candidate_waiting_players"]["median"],
+                    "median_candidate_external_progression":
+                        p["progression_bottleneck"]["candidate_external_progression_for_waiting_players"]["median"],
                 }
                 for p in bottleneck_ranking
             ],
@@ -313,12 +362,18 @@ def analyze_group(
                         p["early_completion"]["completion_position"]["median"],
                     "median_peers_still_active_fraction":
                         p["early_completion"]["peers_still_active_fraction_at_completion"]["median"],
-                    "median_released_checks":
-                        p["early_release"]["released_checks"]["median"],
-                    "median_released_external_progression_items":
-                        p["early_release"]["released_external_progression_items"]["median"],
-                    "median_release_checks_ratio_to_active_peer_median":
-                        p["early_release"]["release_checks_ratio_to_active_peer_median"]["median"],
+                    "median_released_checks_min":
+                        p["early_release"]["released_checks_min"]["median"],
+                    "median_released_checks_expected":
+                        p["early_release"]["released_checks_expected"]["median"],
+                    "median_released_checks_max":
+                        p["early_release"]["released_checks_max"]["median"],
+                    "median_released_external_progression_expected":
+                        p["early_release"]["released_external_progression_items_expected"]["median"],
+                    "median_release_checks_ratio_to_active_peer_median_expected":
+                        p["early_release"]["release_checks_ratio_to_active_peer_median_expected"]["median"],
+                    "median_early_release_index":
+                        p["early_release"]["early_release_index"]["median"],
                 }
                 for p in release_ranking
             ],
