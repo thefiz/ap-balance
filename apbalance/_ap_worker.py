@@ -91,6 +91,8 @@ def main() -> int:
     import Main
     import Utils
 
+    from apbalance.analysis import analyze_single_seed
+
     generate_args = Generate.mystery_argparse([
         "--player_files_path", str(args.players.resolve()),
         "--multi", "1",
@@ -122,9 +124,11 @@ def main() -> int:
 
     manifest = getattr(world, "manifest", None) or {}
 
+    single_seed_analysis = analyze_single_seed(logical_spheres)
+
     result = {
         "schema_version": 1,
-        "analyzer_version": "0.1.0",
+        "analyzer_version": "0.2.0",
         "archipelago_version": getattr(Utils, "__version__", None),
         "seed": seed,
         "seed_name": multiworld.seed_name,
@@ -149,6 +153,7 @@ def main() -> int:
             "unreachable_locations": logical_unreachable,
             "spheres": logical_spheres,
         },
+        "analysis": single_seed_analysis,
         "sendable_spheres": {
             "count": len(sendable_spheres),
             "unreachable_locations": sendable_unreachable,
